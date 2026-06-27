@@ -80,7 +80,7 @@ public class OpenAIChatModel extends ChatModelBase {
      * @param formatter         the message formatter
      * @param configuredOptions the pre-configured options (can be null for stateless usage)
      */
-    private OpenAIChatModel(
+    protected OpenAIChatModel(
             OpenAIClient client,
             Formatter<OpenAIMessage, OpenAIResponse, OpenAIRequest> formatter,
             GenerateOptions configuredOptions) {
@@ -145,6 +145,9 @@ public class OpenAIChatModel extends ChatModelBase {
             formatter.applyTools(request, tools);
         }
 
+        // Allow subclasses to customize the request before the API call
+        customizeRequest(request, tools, effectiveOptions);
+
         // Apply generation options (formatter handles provider-specific options)
         formatter.applyOptions(request, effectiveOptions, null);
 
@@ -186,6 +189,22 @@ public class OpenAIChatModel extends ChatModelBase {
                             })
                     .subscribeOn(Schedulers.boundedElastic());
         }
+    }
+
+    /**
+     * Hook method for subclasses to customize the request before the API call.
+     *
+     * <p>Called after tools and options have been applied to the request,
+     * but before the actual API call is made. Subclasses can override this
+     * to modify the request based on the tools and options.
+     *
+     * @param request  the request to customize
+     * @param tools    the tool schemas (may be null or empty)
+     * @param options  the effective generation options
+     */
+    protected void customizeRequest(
+            OpenAIRequest request, List<ToolSchema> tools, GenerateOptions options) {
+        // Default: no customization
     }
 
     /**
