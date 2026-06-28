@@ -19,9 +19,18 @@ import io.agentscope.core.ReActAgent;
 import io.agentscope.core.event.TextBlockDeltaEvent;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
-import io.agentscope.core.tool.Toolkit;
+import io.agentscope.core.model.GenerateOptions;
+import io.agentscope.core.model.Model;
+import io.agentscope.core.model.OllamaChatModel;
+import io.agentscope.extensions.model.openai.OpenAIChatModel;
+import io.agentscope.extensions.model.openai.formatter.OpenAIChatFormatter;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * BasicChatExample - The simplest Agent conversation example.
@@ -43,6 +52,8 @@ import java.io.InputStreamReader;
  */
 public class BasicChatExample {
 
+    private static final Pattern AT_PATH = Pattern.compile("@(?<path>~?[\\w./\\\\\\-~]+)");
+
     public static void main(String[] args) throws Exception {
         String apiKey = System.getenv("DASHSCOPE_API_KEY");
         if (apiKey == null || apiKey.isBlank()) {
@@ -55,15 +66,18 @@ public class BasicChatExample {
         System.out.println("\n" + "=".repeat(60));
         System.out.println("Basic Chat Example");
         System.out.println("=".repeat(60));
-        System.out.println("A simple interactive chat with streaming output.");
+        System.out.println("Use @path/to/file to upload files for the AI to read.");
         System.out.println("Type 'exit' to quit.\n");
+
+        //        Toolkit toolkit = new Toolkit();
+        //        toolkit.registerTool(new PdfReaderTool());
 
         ReActAgent agent =
                 ReActAgent.builder()
                         .name("Assistant")
                         .sysPrompt("You are a helpful AI assistant. Be friendly and concise.")
-                        .model("dashscope:qwen-plus")
-                        .toolkit(new Toolkit())
+                        .model(opencodeModel())
+                        //                        .toolkit(toolkit)
                         .build();
 
         BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
@@ -80,7 +94,8 @@ public class BasicChatExample {
                 continue;
             }
 
-            Msg userMsg = new UserMessage(input.trim());
+            //            String processed = expandAtPaths(input);
+            Msg userMsg = new UserMessage(input);
 
             System.out.print("\nAssistant: ");
             agent.streamEvents(userMsg)
@@ -93,5 +108,79 @@ public class BasicChatExample {
                     .blockLast();
             System.out.println("\n");
         }
+    }
+
+    private static String expandAtPaths(String input) {
+        Matcher m = AT_PATH.matcher(input);
+        if (!m.find()) {
+            return input;
+        }
+        m.reset();
+        StringBuilder sb = new StringBuilder();
+        int last = 0;
+        while (m.find()) {
+            String ref = m.group("path");
+            sb.append(input, last, m.start());
+            String content = readFile(ref);
+            if (content != null) {
+                sb.append(ref)
+                        .append("\n\n<attached_file path=\"")
+                        .append(ref)
+                        .append("\">\n")
+                        .append(content)
+                        .append("\n</attached_file>");
+            } else {
+                sb.append('@').append(ref);
+            }
+            last = m.end();
+        }
+        sb.append(input.substring(last));
+        return sb.toString();
+    }
+
+    private static String readFile(String path) {
+        try {
+            Path p =
+                    Path.of(
+                            path.startsWith("~/")
+                                    ? System.getProperty("user.home") + path.substring(1)
+                                    : path);
+            if (!Files.exists(p)) {
+                return null;
+            }
+            if (path.toLowerCase().endsWith(".pdf")) {
+                return new PdfReaderTool().readPdf(p.toAbsolutePath().toString(), null, null);
+            }
+            String text = Files.readString(p);
+            return text.length() > 100_000
+                    ? text.substring(0, 100_000) + "\n... [truncated]"
+                    : text;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static Model model() {
+        return OllamaChatModel.builder().modelName("deepseek-r1:1.5b").build();
+    }
+
+    private static Model opencodeModel() {
+        return OpenAIChatModel.builder().baseUrl("https://opencode.ai/zen/v1").stream(true)
+                .modelName("deepseek-v4-flash-free")
+                .formatter(new OpenAIChatFormatter())
+                .build();
+    }
+
+    private static Model kModel() {
+        Model model = opencodeModel();
+
+        model.stream(
+                        List.of(new UserMessage("Count from 1 to 5.")),
+                        /* tools= */ List.of(),
+                        GenerateOptions.builder().build())
+                .doOnNext(chunk -> System.out.println("Delta: " + chunk.getContent()))
+                .doOnComplete(() -> System.out.println("Stream completed"))
+                .blockLast();
+        return model;
     }
 }
